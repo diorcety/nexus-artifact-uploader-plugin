@@ -18,6 +18,7 @@ import org.kohsuke.stapler.QueryParameter;
 import java.io.File;
 import java.io.IOException;
 import java.io.Serializable;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import javax.annotation.CheckForNull;
@@ -138,82 +139,36 @@ public class NexusArtifactUploader extends Builder implements SimpleBuildStep, S
 
     @Override
     public void perform(Run build, FilePath workspace, Launcher launcher, TaskListener listener) throws IOException, InterruptedException {
-        boolean result = false;
         EnvVars envVars = build.getEnvironment(listener);
         Item project = build.getParent();
         if (artifacts == null || artifacts.size() == 0) {
             throw new IOException("No artifacts defined. Artifacts must be defined in addition to group id. See https://plugins.jenkins.io/nexus-artifact-uploader");
         }
-        for (Artifact artifact : artifacts) {
+
+        final List<org.sonatype.aether.artifact.Artifact> nexusArtifacts = new ArrayList<org.sonatype.aether.artifact.Artifact>(artifacts.size());
+        for (final Artifact artifact : artifacts) {
             FilePath artifactFilePath = new FilePath(workspace, build.getEnvironment(listener).expand(artifact.getFile()));
             if (!artifactFilePath.exists()) {
                 listener.getLogger().println(artifactFilePath.getName() + " file doesn't exists");
                 throw new IOException(artifactFilePath.getName() + " file doesn't exists");
             } else {
-                result = artifactFilePath.act(new ArtifactFileCallable(listener,
-                        this.getUsername(envVars, project),
-                        this.getPassword(envVars, project),
-                        envVars.expand(nexusUrl),
-                        envVars.expand(groupId),
-                        envVars.expand(artifact.getArtifactId()),
-                        envVars.expand(version),
-                        envVars.expand(repository),
-                        envVars.expand(artifact.getType()),
-                        envVars.expand(artifact.getClassifier()),
-                        protocol,
-                        nexusVersion
-                ));
-            }
-            if (!result) {
-                throw new AbortException("Uploading file " + artifactFilePath.getName() + " failed.");
+                nexusArtifacts.add(artifactFilePath.act(new MasterToSlaveFileCallable<org.sonatype.aether.artifact.Artifact>() {
+                    private static final long serialVersionUID = 1L;
+
+                    @Override
+                    public org.sonatype.aether.artifact.Artifact invoke(File file, VirtualChannel virtualChannel) {
+                        return Utils.toArtifact(artifact, groupId, version, file);
+                    }
+
+                    @Override
+                    public void checkRoles(RoleChecker checker) throws SecurityException {
+                    }
+                }));
             }
         }
-    }
-
-    private static final class ArtifactFileCallable extends MasterToSlaveFileCallable<Boolean> {
-
-        private final TaskListener listener;
-        private final String resolvedNexusUser;
-        private final String resolvedNexusPassword;
-        private final String resolvedNexusUrl;
-        private final String resolvedGroupId;
-        private final String resolvedArtifactId;
-        private final String resolvedVersion;
-        private final String resolvedRepository;
-        private final String resolvedType;
-        private final String resolvedClassifier;
-        private final String resolvedProtocol;
-        private final String resolvedNexusVersion;
-
-        public ArtifactFileCallable(TaskListener Listener, String ResolvedNexusUser, String ResolvedNexusPassword, String ResolvedNexusUrl,
-                                    String ResolvedGroupId, String ResolvedArtifactId, String ResolvedVersion,
-                                    String ResolvedRepository, String ResolvedType, String ResolvedClassifier,
-                                    String ResolvedProtocol, String ResolvedNexusVersion) {
-            this.listener = Listener;
-            this.resolvedNexusUser = ResolvedNexusUser;
-            this.resolvedNexusPassword = ResolvedNexusPassword;
-            this.resolvedNexusUrl = ResolvedNexusUrl;
-            this.resolvedGroupId = ResolvedGroupId;
-            this.resolvedArtifactId = ResolvedArtifactId;
-            this.resolvedVersion = ResolvedVersion;
-            this.resolvedRepository = ResolvedRepository;
-            this.resolvedType = ResolvedType;
-            this.resolvedClassifier = ResolvedClassifier;
-            this.resolvedProtocol = ResolvedProtocol;
-            this.resolvedNexusVersion = ResolvedNexusVersion;
-        }
-
-        @Override
-        public Boolean invoke(File artifactFile, VirtualChannel channel) throws IOException {
-            return Utils.uploadArtifact(artifactFile, listener, resolvedNexusUser, resolvedNexusPassword, resolvedNexusUrl,
-                    resolvedGroupId, resolvedArtifactId, resolvedVersion, resolvedRepository, resolvedType, resolvedClassifier,
-                    resolvedProtocol, resolvedNexusVersion);
-        }
-
-        @Override
-        public void checkRoles(RoleChecker checker) throws SecurityException {
-
-        }
+        Utils.uploadArtifacts(listener, this.getUsername(envVars, project), this.getPassword(envVars, project),
+                envVars.expand(nexusUrl), envVars.expand(repository), protocol, nexusVersion,
+                nexusArtifacts.toArray(new org.sonatype.aether.artifact.Artifact[0]));
     }
 
     @Override
